@@ -24,6 +24,7 @@ export interface User {
   is_active: boolean;
   email_verified: boolean;
   created_at: string;
+  lemma_did?: string;  // Lemma decentralized identifier
 }
 
 export interface AuthResponse {

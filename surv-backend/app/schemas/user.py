@@ -26,6 +26,7 @@ class UserResponse(UserBase):
     is_active: bool
     email_verified: bool
     created_at: datetime
+    lemma_did: Optional[str] = None  # Lemma decentralized identifier
     
     class Config:
         from_attributes = True

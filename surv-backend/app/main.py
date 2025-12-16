@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from app.config import settings
 from app.database import engine, Base
-from app.api.v1 import auth, customers, jobs, invoices, estimates, time_tracking, recurring_jobs, reports, files, payments, notifications, booking, campaigns, sms_webhook, users
+from app.api.v1 import auth, customers, jobs, invoices, estimates, time_tracking, recurring_jobs, reports, files, payments, notifications, booking, campaigns, sms_webhook, users, lemma_auth
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -21,7 +21,12 @@ app = FastAPI(
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "https://surv-report-gen-d8f9f99b4dc3.herokuapp.com"],
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://localhost:5173", 
+        "https://surv-report-gen-d8f9f99b4dc3.herokuapp.com",
+        "https://lemma.id",  # Lemma IAM authentication
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,6 +48,7 @@ app.include_router(booking.router, prefix="/api/v1")
 app.include_router(campaigns.router, prefix="/api/v1")
 app.include_router(sms_webhook.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
+app.include_router(lemma_auth.router, prefix="/api/v1")
 
 
 @app.get("/api")

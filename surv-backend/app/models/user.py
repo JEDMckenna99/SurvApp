@@ -18,7 +18,7 @@ class User(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
+    hashed_password = Column(String, nullable=True)  # Nullable for Lemma-only auth
     first_name = Column(String(100))
     last_name = Column(String(100))
     phone = Column(String(20))
@@ -28,6 +28,9 @@ class User(Base):
     last_login = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Lemma IAM fields
+    lemma_did = Column(String, unique=True, nullable=True, index=True)  # Decentralized ID
 
     # Relationships
     created_customers = relationship("Customer", back_populates="created_by_user", foreign_keys="Customer.created_by")
