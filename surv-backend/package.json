@@ -1,0 +1,13 @@
+{
+  "name": "surv-app",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "cd frontend && npm install --include=dev && npm run build",
+    "heroku-postbuild": "npm run build"
+  },
+  "engines": {
+    "node": "18.x",
+    "npm": "9.x"
+  }
+}
+
