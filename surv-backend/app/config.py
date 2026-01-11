@@ -17,10 +17,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
     
     # Lemma IAM Settings - Set via Heroku config vars
-    # Get these from https://lemma.id after registering your site
     LEMMA_API_KEY: str = ""
     LEMMA_SITE_ID: str = ""
-    LEMMA_ISSUER_DID: str = ""
     
     # Twilio SMS Settings - Set via Heroku config vars
     TWILIO_ACCOUNT_SID: str = ""

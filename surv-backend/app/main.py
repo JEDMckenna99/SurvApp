@@ -21,12 +21,7 @@ app = FastAPI(
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000", 
-        "http://localhost:5173", 
-        "https://surv-report-gen-d8f9f99b4dc3.herokuapp.com",
-        "https://lemma.id",  # Lemma IAM authentication
-    ],
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "https://surv-report-gen-d8f9f99b4dc3.herokuapp.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,6 +29,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(lemma_auth.router, prefix="/api/v1")  # Lemma IAM authentication
 app.include_router(customers.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(invoices.router, prefix="/api/v1")
@@ -48,7 +44,6 @@ app.include_router(booking.router, prefix="/api/v1")
 app.include_router(campaigns.router, prefix="/api/v1")
 app.include_router(sms_webhook.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
-app.include_router(lemma_auth.router, prefix="/api/v1")
 
 
 @app.get("/api")
