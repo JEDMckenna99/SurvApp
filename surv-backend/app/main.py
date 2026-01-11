@@ -29,7 +29,6 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
-app.include_router(lemma_auth.router, prefix="/api/v1")  # Lemma IAM authentication
 app.include_router(customers.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(invoices.router, prefix="/api/v1")
@@ -44,6 +43,7 @@ app.include_router(booking.router, prefix="/api/v1")
 app.include_router(campaigns.router, prefix="/api/v1")
 app.include_router(sms_webhook.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
+app.include_router(lemma_auth.router, prefix="/api/v1")
 
 
 @app.get("/api")

@@ -18,6 +18,12 @@ import { loginStart, loginSuccess, loginFailure } from '../../store/authSlice'
 import { lemmaAuth, SURV_PERMISSIONS } from '../../api/lemmaAuth'
 import { apiClient } from '../../api/client'
 
+interface LemmaConfig {
+  apiKey: string
+  siteId: string
+  configured: boolean
+}
+
 type AuthStep = 'email' | 'waiting' | 'processing' | 'error'
 
 export default function LoginPage() {
@@ -25,35 +31,29 @@ export default function LoginPage() {
   const [authStep, setAuthStep] = useState<AuthStep>('email')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [lemmaConfigured, setLemmaConfigured] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const dispatch = useDispatch()
 
-  // Initialize Lemma SDK on mount - fetch config from backend if not in env
+  // Initialize Lemma SDK on mount
   useEffect(() => {
     const initLemma = async () => {
       try {
-        // Try environment variables first [[memory:7930734]]
-        let apiKey = import.meta.env.VITE_LEMMA_API_KEY || ''
-        let siteId = import.meta.env.VITE_LEMMA_SITE_ID || ''
-        
-        // If not in env vars, fetch from backend (Heroku stores config there)
-        if (!siteId) {
-          try {
-            const configResponse = await apiClient.get('/api/v1/auth/lemma-config')
-            if (configResponse.data.configured) {
-              siteId = configResponse.data.site_id
-              // API key should be set via env var for security
-            }
-          } catch {
-            console.log('Could not fetch Lemma config from backend')
-          }
+        // Fetch Lemma config from backend
+        const configResponse = await apiClient.get('/api/v1/auth/lemma-config')
+        const lemmaConfig: LemmaConfig = {
+          ...configResponse.data,
+          // API key comes from environment variable (VITE_LEMMA_API_KEY)
+          // Site ID comes from backend config
+          apiKey: import.meta.env.VITE_LEMMA_API_KEY || '',
+          siteId: configResponse.data.site_id || import.meta.env.VITE_LEMMA_SITE_ID || '',
         }
-        
-        if (apiKey && siteId) {
-          await lemmaAuth.initialize({ apiKey, siteId })
-          setLemmaConfigured(true)
+
+        if (lemmaConfig.apiKey && lemmaConfig.siteId) {
+          await lemmaAuth.initialize({
+            apiKey: lemmaConfig.apiKey,
+            siteId: lemmaConfig.siteId,
+          })
           
           // Check if returning from email confirmation
           const params = new URLSearchParams(location.search)
@@ -63,12 +63,10 @@ export default function LoginPage() {
             // Check if already authenticated
             checkExistingAuth()
           }
-        } else if (siteId) {
-          // Site ID available but no API key - can still show Lemma branding
-          setLemmaConfigured(true)
         }
       } catch (err) {
         console.error('Failed to initialize Lemma:', err)
+        // Continue without Lemma - will use fallback auth
       }
     }
     initLemma()
@@ -153,8 +151,8 @@ export default function LoginPage() {
     }
 
     try {
-      // If Lemma is configured and initialized, use SDK
-      if (lemmaConfigured && lemmaAuth.isInitialized()) {
+      // If Lemma is initialized, use it
+      if (lemmaAuth.isInitialized()) {
         await lemmaAuth.requestAccess(
           email,
           SURV_PERMISSIONS.TECHNICIAN,
@@ -163,7 +161,7 @@ export default function LoginPage() {
         setAuthStep('waiting')
         toast.info('Check your email to complete sign in')
       } else {
-        // Use backend magic link endpoint (uses Lemma API if configured on backend)
+        // Fallback: Use backend magic link (which uses Lemma API server-side)
         await apiClient.post('/api/v1/auth/magic-link', { email })
         setAuthStep('waiting')
         toast.info('Check your email for a sign-in link')
