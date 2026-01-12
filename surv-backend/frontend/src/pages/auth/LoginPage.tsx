@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useDispatch } from 'react-redux'
 import {
   Box,
   Button,
   Container,
-  TextField,
   Typography,
   Paper,
   Alert,
@@ -15,111 +14,67 @@ import {
 } from '@mui/material'
 import { toast } from 'react-toastify'
 import { loginStart, loginSuccess, loginFailure } from '../../store/authSlice'
-import { lemmaAuth, SURV_PERMISSIONS } from '../../api/lemmaAuth'
+import { lemmaAuth } from '../../api/lemmaAuth'
 import { apiClient } from '../../api/client'
 
-interface LemmaConfig {
-  apiKey: string
-  siteId: string
-  configured: boolean
-}
-
-type AuthStep = 'email' | 'waiting' | 'processing' | 'error'
+type AuthStep = 'ready' | 'authenticating' | 'verifying' | 'error'
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('')
-  const [authStep, setAuthStep] = useState<AuthStep>('email')
+  const [authStep, setAuthStep] = useState<AuthStep>('ready')
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [lemmaReady, setLemmaReady] = useState(false)
   const navigate = useNavigate()
-  const location = useLocation()
   const dispatch = useDispatch()
 
-  // Initialize Lemma SDK on mount
+  // Initialize Lemma Wallet SDK on mount
   useEffect(() => {
     const initLemma = async () => {
       try {
         // Fetch Lemma config from backend
         const configResponse = await apiClient.get('/api/v1/auth/lemma-config')
-        const lemmaConfig: LemmaConfig = {
-          ...configResponse.data,
-          // API key comes from environment variable (VITE_LEMMA_API_KEY)
-          // Site ID comes from backend config
-          apiKey: import.meta.env.VITE_LEMMA_API_KEY || '',
-          siteId: configResponse.data.site_id || import.meta.env.VITE_LEMMA_SITE_ID || '',
-        }
+        const siteId = configResponse.data.site_id || import.meta.env.VITE_LEMMA_SITE_ID || ''
 
-        if (lemmaConfig.apiKey && lemmaConfig.siteId) {
+        if (siteId) {
           await lemmaAuth.initialize({
-            apiKey: lemmaConfig.apiKey,
-            siteId: lemmaConfig.siteId,
+            siteId,
+            debug: import.meta.env.DEV,
           })
           
-          // Check if returning from email confirmation
-          const params = new URLSearchParams(location.search)
-          if (params.get('lemma_callback') === 'true') {
-            handleAuthCallback()
-          } else {
-            // Check if already authenticated
-            checkExistingAuth()
+          setLemmaReady(true)
+
+          // Check if already authenticated
+          const isAuth = await lemmaAuth.isAuthenticated()
+          if (isAuth) {
+            const user = await lemmaAuth.getCurrentUser()
+            if (user) {
+              await completeLogin(user)
+              return
+            }
           }
         }
       } catch (err) {
         console.error('Failed to initialize Lemma:', err)
-        // Continue without Lemma - will use fallback auth
+        setError('Authentication system unavailable')
+      } finally {
+        setLoading(false)
       }
     }
     initLemma()
-  }, [location])
-
-  // Check for existing Lemma credentials
-  const checkExistingAuth = async () => {
-    try {
-      const isAuth = await lemmaAuth.isAuthenticated()
-      if (isAuth) {
-        const user = await lemmaAuth.getCurrentUser()
-        if (user) {
-          await completeLogin(user)
-        }
-      }
-    } catch (err) {
-      console.error('Auth check failed:', err)
-    }
-  }
-
-  // Handle callback from Lemma email confirmation
-  const handleAuthCallback = async () => {
-    setAuthStep('processing')
-    setLoading(true)
-
-    try {
-      // Lemma SDK handles the callback and stores credentials
-      const user = await lemmaAuth.getCurrentUser()
-      
-      if (user) {
-        await completeLogin(user)
-      } else {
-        throw new Error('Failed to retrieve credentials')
-      }
-    } catch (err: any) {
-      setError(err.message || 'Authentication failed')
-      setAuthStep('error')
-    } finally {
-      setLoading(false)
-    }
-  }
+  }, [])
 
   // Complete login and sync with backend
   const completeLogin = async (lemmaUser: any) => {
+    setAuthStep('verifying')
     dispatch(loginStart())
 
     try {
       // Verify with backend and get/create user record
       const response = await apiClient.post('/api/v1/auth/lemma-verify', {
-        user_did: lemmaUser.did,
-        user_email: lemmaUser.email,
-        permissions: lemmaUser.permissions,
-        lemmas: lemmaUser.lemmas,
+        user_did: lemmaUser.ppid,
+        user_email: `${lemmaUser.ppid.slice(-8)}@wallet.lemma.id`, // Generate email from PPID
+        permissions: lemmaUser.permissions || [],
+        lemmas: lemmaUser.credential ? [lemmaUser.credential] : [],
       })
 
       const userData = response.data
@@ -127,6 +82,7 @@ export default function LoginPage() {
       dispatch(loginSuccess({
         user: userData.user,
         token: userData.access_token,
+        verificationMethod: 'lemma',
       }))
 
       toast.success('Welcome to Surv!')
@@ -138,46 +94,50 @@ export default function LoginPage() {
     }
   }
 
-  // Request access via email
-  const handleRequestAccess = async (e: React.FormEvent) => {
-    e.preventDefault()
+  // Sign in with passkey
+  const handleSignIn = async () => {
     setError('')
-    setLoading(true)
+    setAuthStep('authenticating')
     
-    if (!email) {
-      setError('Please enter your email address')
-      setLoading(false)
-      return
-    }
-
     try {
-      // If Lemma is initialized, use it
-      if (lemmaAuth.isInitialized()) {
-        await lemmaAuth.requestAccess(
-          email,
-          SURV_PERMISSIONS.TECHNICIAN,
-          window.location.origin + '/login?lemma_callback=true'
-        )
-        setAuthStep('waiting')
-        toast.info('Check your email to complete sign in')
+      const user = await lemmaAuth.signIn()
+      
+      if (user) {
+        await completeLogin(user)
       } else {
-        // Fallback: Use backend magic link (which uses Lemma API server-side)
-        await apiClient.post('/api/v1/auth/magic-link', { email })
-        setAuthStep('waiting')
-        toast.info('Check your email for a sign-in link')
+        throw new Error('Authentication failed')
       }
     } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Failed to send login email')
+      setError(err.message || 'Passkey authentication failed')
       setAuthStep('error')
-    } finally {
-      setLoading(false)
     }
   }
 
-  // Reset to email entry
+  // Reset to ready state
   const handleTryAgain = () => {
     setError('')
-    setAuthStep('email')
+    setAuthStep('ready')
+  }
+
+  // Show loading while initializing
+  if (loading) {
+    return (
+      <Container component="main" maxWidth="xs">
+        <Box
+          sx={{
+            marginTop: 8,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+          }}
+        >
+          <CircularProgress />
+          <Typography variant="body2" sx={{ mt: 2 }}>
+            Initializing secure authentication...
+          </Typography>
+        </Box>
+      </Container>
+    )
   }
 
   return (
@@ -216,84 +176,70 @@ export default function LoginPage() {
             </Typography>
           </Box>
 
-          {/* Email Entry Step */}
-          {authStep === 'email' && (
+          {/* Ready State - Show Sign In Button */}
+          {authStep === 'ready' && lemmaReady && (
             <Fade in>
-              <Box component="form" onSubmit={handleRequestAccess} noValidate>
+              <Box sx={{ textAlign: 'center' }}>
                 <Typography 
                   variant="body1" 
                   color="text.secondary" 
-                  sx={{ mb: 3, textAlign: 'center' }}
+                  sx={{ mb: 3 }}
                 >
-                  Sign in with your email address
+                  Sign in with your passkey
                 </Typography>
 
-                <TextField
-                  margin="normal"
-                  required
-                  fullWidth
-                  id="email"
-                  label="Email Address"
-                  name="email"
-                  autoComplete="email"
-                  autoFocus
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  disabled={loading}
-                  sx={{
-                    '& .MuiOutlinedInput-root': {
-                      '&.Mui-focused fieldset': {
-                        borderColor: '#1976d2',
-                      },
-                    },
-                  }}
-                />
-
                 <Button
-                  type="submit"
                   fullWidth
                   variant="contained"
-                  disabled={loading || !email}
+                  onClick={handleSignIn}
+                  size="large"
                   sx={{ 
-                    mt: 3, 
-                    mb: 2,
                     py: 1.5,
                     textTransform: 'none',
                     fontSize: '1rem',
                     fontWeight: 600,
                   }}
                 >
-                  {loading ? (
-                    <CircularProgress size={24} color="inherit" />
-                  ) : (
-                    'Continue with Email'
-                  )}
+                  Sign In with Passkey
                 </Button>
 
-                <Divider sx={{ my: 2 }}>
+                <Divider sx={{ my: 3 }}>
                   <Typography variant="caption" color="text.secondary">
-                    Secure passwordless login
+                    Passwordless authentication
                   </Typography>
                 </Divider>
 
                 <Box sx={{ 
-                  mt: 2, 
                   p: 2, 
                   bgcolor: 'rgba(25, 118, 210, 0.04)', 
                   borderRadius: 1,
                   border: '1px solid rgba(25, 118, 210, 0.1)',
                 }}>
                   <Typography variant="caption" color="text.secondary" component="div">
-                    Powered by <strong>Lemma</strong> cryptographic authentication.
-                    No password required - verify your identity via email confirmation.
+                    Powered by <strong>Lemma</strong> passkey authentication.
+                    Use your device biometrics (Touch ID, Face ID, Windows Hello) to sign in securely.
                   </Typography>
                 </Box>
               </Box>
             </Fade>
           )}
 
-          {/* Waiting for Email Confirmation */}
-          {authStep === 'waiting' && (
+          {/* Not Ready - Lemma not configured */}
+          {authStep === 'ready' && !lemmaReady && (
+            <Fade in>
+              <Box sx={{ textAlign: 'center' }}>
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  Authentication system not configured
+                </Alert>
+                <Typography variant="body2" color="text.secondary">
+                  Please contact your administrator to set up Lemma authentication.
+                </Typography>
+              </Box>
+            </Fade>
+          )}
+
+          {/* Authenticating with Passkey */}
+          {authStep === 'authenticating' && (
             <Fade in>
               <Box sx={{ textAlign: 'center', py: 3 }}>
                 <Box sx={{ mb: 3 }}>
@@ -301,36 +247,23 @@ export default function LoginPage() {
                 </Box>
                 
                 <Typography variant="h6" gutterBottom>
-                  Check your email
+                  Authenticating...
                 </Typography>
                 
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                  We sent a sign-in link to <strong>{email}</strong>
+                <Typography variant="body2" color="text.secondary">
+                  Complete the passkey prompt on your device
                 </Typography>
-                
-                <Typography variant="caption" color="text.secondary" component="div">
-                  Click the link in your email to complete sign-in.
-                  The link expires in 15 minutes.
-                </Typography>
-
-                <Button 
-                  variant="text" 
-                  onClick={handleTryAgain}
-                  sx={{ mt: 3 }}
-                >
-                  Use a different email
-                </Button>
               </Box>
             </Fade>
           )}
 
-          {/* Processing Authentication */}
-          {authStep === 'processing' && (
+          {/* Verifying with Backend */}
+          {authStep === 'verifying' && (
             <Fade in>
               <Box sx={{ textAlign: 'center', py: 3 }}>
                 <CircularProgress size={48} />
                 <Typography variant="body1" sx={{ mt: 2 }}>
-                  Verifying your credentials...
+                  Verifying credentials...
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   This only takes a moment
@@ -357,19 +290,12 @@ export default function LoginPage() {
               </Box>
             </Fade>
           )}
-
-          {/* General Error Display */}
-          {error && authStep === 'email' && (
-            <Alert severity="error" sx={{ mt: 2 }}>
-              {error}
-            </Alert>
-          )}
         </Paper>
 
         {/* Security Badge */}
         <Box sx={{ mt: 3, textAlign: 'center' }}>
           <Typography variant="caption" color="text.secondary">
-            Secured with Ed25519 cryptographic signatures
+            Secured with passkeys and Ed25519 cryptographic signatures
           </Typography>
         </Box>
       </Box>
