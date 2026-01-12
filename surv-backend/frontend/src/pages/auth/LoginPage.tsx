@@ -43,19 +43,24 @@ export default function LoginPage() {
           
           setLemmaReady(true)
 
-          // Check if already authenticated
-          const isAuth = await lemmaAuth.isAuthenticated()
-          if (isAuth) {
-            const user = await lemmaAuth.getCurrentUser()
-            if (user) {
-              await completeLogin(user)
-              return
+          // Only check for existing auth if wallet is already unlocked
+          // Don't auto-prompt for passkey - let user click the button
+          try {
+            const isAuth = await lemmaAuth.isAuthenticated()
+            if (isAuth) {
+              const user = await lemmaAuth.getCurrentUser()
+              if (user) {
+                await completeLogin(user)
+                return
+              }
             }
+          } catch {
+            // Wallet not unlocked yet - that's fine, show sign-in button
           }
         }
       } catch (err) {
         console.error('Failed to initialize Lemma:', err)
-        setError('Authentication system unavailable')
+        // Don't show error - just show sign-in button if Lemma SDK loads
       } finally {
         setLoading(false)
       }
