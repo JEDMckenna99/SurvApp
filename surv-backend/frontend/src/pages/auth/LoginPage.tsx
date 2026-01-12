@@ -33,14 +33,14 @@ export default function LoginPage() {
       try {
         // Fetch Lemma config from backend
         const configResponse = await apiClient.get('/api/v1/auth/lemma-config')
-        const siteId = configResponse.data.site_id || import.meta.env.VITE_LEMMA_SITE_ID || ''
-        const apiKey = import.meta.env.VITE_LEMMA_API_KEY || configResponse.data.api_key || ''
+        const siteId = configResponse.data.site_id || ''
+        const apiKey = configResponse.data.api_key || ''
 
-        if (siteId) {
+        if (siteId && apiKey && configResponse.data.configured) {
           await lemmaAuth.initialize({
             apiKey,
             siteId,
-            debug: import.meta.env.DEV,
+            debug: true, // Enable debug for troubleshooting
           })
           
           setLemmaReady(true)

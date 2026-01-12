@@ -295,19 +295,21 @@ async def register_lemma_site():
 @router.get("/lemma-config")
 async def get_lemma_config():
     """
-    Get public Lemma configuration for frontend
+    Get Lemma configuration for frontend
     
-    Returns site_id (safe to expose) but not api_key
+    Returns both site_id and api_key for SDK initialization.
+    The API key is like a client ID and is safe to expose in frontend code.
     """
-    if not settings.LEMMA_SITE_ID:
+    if not settings.LEMMA_SITE_ID or not settings.LEMMA_API_KEY:
         return {
             "configured": False,
-            "site_id": None
+            "site_id": None,
+            "api_key": None
         }
     
     return {
         "configured": True,
         "site_id": settings.LEMMA_SITE_ID,
-        # Don't expose API key - frontend gets it from env vars
+        "api_key": settings.LEMMA_API_KEY,
     }
 
