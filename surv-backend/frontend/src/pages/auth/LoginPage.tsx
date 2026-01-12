@@ -27,24 +27,25 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const dispatch = useDispatch()
 
-  // Initialize Lemma Wallet SDK on mount
+  // Initialize Lemma IAM SDK on mount
   useEffect(() => {
     const initLemma = async () => {
       try {
         // Fetch Lemma config from backend
         const configResponse = await apiClient.get('/api/v1/auth/lemma-config')
         const siteId = configResponse.data.site_id || import.meta.env.VITE_LEMMA_SITE_ID || ''
+        const apiKey = import.meta.env.VITE_LEMMA_API_KEY || configResponse.data.api_key || ''
 
         if (siteId) {
           await lemmaAuth.initialize({
+            apiKey,
             siteId,
             debug: import.meta.env.DEV,
           })
           
           setLemmaReady(true)
 
-          // Only check for existing auth if wallet is already unlocked
-          // Don't auto-prompt for passkey - let user click the button
+          // Check if already authenticated with central wallet
           try {
             const isAuth = await lemmaAuth.isAuthenticated()
             if (isAuth) {
@@ -55,12 +56,11 @@ export default function LoginPage() {
               }
             }
           } catch {
-            // Wallet not unlocked yet - that's fine, show sign-in button
+            // Not authenticated yet - show sign-in button
           }
         }
       } catch (err) {
         console.error('Failed to initialize Lemma:', err)
-        // Don't show error - just show sign-in button if Lemma SDK loads
       } finally {
         setLoading(false)
       }
@@ -76,8 +76,8 @@ export default function LoginPage() {
     try {
       // Verify with backend and get/create user record
       const response = await apiClient.post('/api/v1/auth/lemma-verify', {
-        user_did: lemmaUser.ppid,
-        user_email: `${lemmaUser.ppid.slice(-8)}@wallet.lemma.id`, // Generate email from PPID
+        user_did: lemmaUser.ppid || lemmaUser.did,
+        user_email: lemmaUser.email || `${(lemmaUser.ppid || lemmaUser.did || '').slice(-8)}@wallet.lemma.id`,
         permissions: lemmaUser.permissions || [],
         lemmas: lemmaUser.credential ? [lemmaUser.credential] : [],
       })
@@ -99,7 +99,7 @@ export default function LoginPage() {
     }
   }
 
-  // Sign in with passkey
+  // Sign in with Lemma central wallet
   const handleSignIn = async () => {
     setError('')
     setAuthStep('authenticating')
@@ -110,10 +110,10 @@ export default function LoginPage() {
       if (user) {
         await completeLogin(user)
       } else {
-        throw new Error('Authentication failed')
+        throw new Error('Authentication cancelled or failed')
       }
     } catch (err: any) {
-      setError(err.message || 'Passkey authentication failed')
+      setError(err.message || 'Authentication failed')
       setAuthStep('error')
     }
   }
@@ -190,7 +190,7 @@ export default function LoginPage() {
                   color="text.secondary" 
                   sx={{ mb: 3 }}
                 >
-                  Sign in with your passkey
+                  Sign in with your Lemma wallet
                 </Typography>
 
                 <Button
@@ -205,7 +205,7 @@ export default function LoginPage() {
                     fontWeight: 600,
                   }}
                 >
-                  Sign In with Passkey
+                  Sign In with Lemma
                 </Button>
 
                 <Divider sx={{ my: 3 }}>
@@ -221,8 +221,8 @@ export default function LoginPage() {
                   border: '1px solid rgba(25, 118, 210, 0.1)',
                 }}>
                   <Typography variant="caption" color="text.secondary" component="div">
-                    Powered by <strong>Lemma</strong> passkey authentication.
-                    Use your device biometrics (Touch ID, Face ID, Windows Hello) to sign in securely.
+                    Powered by <strong>Lemma</strong> secure authentication.
+                    Your credentials are stored in your Lemma wallet at lemma.id
                   </Typography>
                 </Box>
               </Box>
@@ -243,7 +243,7 @@ export default function LoginPage() {
             </Fade>
           )}
 
-          {/* Authenticating with Passkey */}
+          {/* Authenticating */}
           {authStep === 'authenticating' && (
             <Fade in>
               <Box sx={{ textAlign: 'center', py: 3 }}>
@@ -256,7 +256,7 @@ export default function LoginPage() {
                 </Typography>
                 
                 <Typography variant="body2" color="text.secondary">
-                  Complete the passkey prompt on your device
+                  Complete the sign-in in the Lemma popup
                 </Typography>
               </Box>
             </Fade>
@@ -300,7 +300,7 @@ export default function LoginPage() {
         {/* Security Badge */}
         <Box sx={{ mt: 3, textAlign: 'center' }}>
           <Typography variant="caption" color="text.secondary">
-            Secured with passkeys and Ed25519 cryptographic signatures
+            Secured with Ed25519 cryptographic signatures
           </Typography>
         </Box>
       </Box>

@@ -1,35 +1,31 @@
 /**
- * Lemma Wallet Authentication Service
+ * Lemma IAM Authentication Service
  * 
- * Passkey-protected wallet-based authentication.
- * No passwords, no email verification - biometric authentication only.
+ * Uses Lemma's central wallet for credential storage.
+ * No local passkey setup required - credentials stored at lemma.id
  * 
  * Documentation: https://lemma.id/docs
  */
 
-// Lemma Wallet SDK loaded from CDN
+// Lemma IAM SDK loaded from CDN
 declare global {
   interface Window {
-    LemmaWallet: any;
+    LemmaIAM: any;
   }
 }
 
 export interface LemmaConfig {
+  apiKey: string;
   siteId: string;
   debug?: boolean;
 }
 
 export interface LemmaUser {
-  ppid: string;  // Privacy-Preserving ID (unique per site)
+  ppid: string;
+  email?: string;
   siteId: string;
   permissions: string[];
   credential: any;
-}
-
-export interface WalletInfo {
-  hasPasskey: boolean;
-  isLocked: boolean;
-  walletId?: string;
 }
 
 // Permission level mapping for Surv roles
@@ -54,140 +50,72 @@ export const SURV_RESOURCES = {
 } as const;
 
 class LemmaAuthService {
-  private wallet: any = null;
+  private lemmaIAM: any = null;
   private config: LemmaConfig | null = null;
   private initialized: boolean = false;
 
   /**
-   * Initialize the Lemma Wallet SDK
+   * Initialize the Lemma IAM SDK with central wallet
    */
   async initialize(config: LemmaConfig): Promise<void> {
     this.config = config;
     
     // Wait for SDK to load
-    if (!window.LemmaWallet) {
+    if (!window.LemmaIAM) {
       await this.loadSDK();
     }
 
-    this.wallet = new window.LemmaWallet({
+    this.lemmaIAM = new window.LemmaIAM({
+      apiKey: config.apiKey,
+      siteId: config.siteId,
+      useCentralWallet: true,  // Use Lemma's central wallet
       debug: config.debug || false,
     });
 
-    await this.wallet.init();
     this.initialized = true;
   }
 
   /**
-   * Load the Lemma Wallet SDK from CDN
+   * Load the Lemma IAM SDK from CDN
    */
   private loadSDK(): Promise<void> {
     return new Promise((resolve, reject) => {
-      if (window.LemmaWallet) {
+      if (window.LemmaIAM) {
         resolve();
         return;
       }
 
       const script = document.createElement('script');
-      script.src = 'https://lemma.id/static/js/lemma-wallet.js';
+      script.src = 'https://lemma.id/static/js/lemma-iam-sdk.js';
       script.async = true;
       script.onload = () => resolve();
-      script.onerror = () => reject(new Error('Failed to load Lemma Wallet SDK'));
+      script.onerror = () => reject(new Error('Failed to load Lemma IAM SDK'));
       document.head.appendChild(script);
     });
   }
 
   /**
-   * Get wallet info (has passkey, is locked, etc.)
-   */
-  async getWalletInfo(): Promise<WalletInfo> {
-    if (!this.wallet) {
-      throw new Error('Lemma wallet not initialized');
-    }
-    return await this.wallet.getWalletInfo();
-  }
-
-  /**
-   * Register a new passkey for the wallet
-   * Prompts user for biometric authentication
-   */
-  async registerPasskey(): Promise<boolean> {
-    if (!this.wallet) {
-      throw new Error('Lemma wallet not initialized');
-    }
-    
-    try {
-      await this.wallet.registerPasskey();
-      return true;
-    } catch (error) {
-      console.error('Passkey registration failed:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Unlock the wallet using passkey (biometric)
-   */
-  async unlockWallet(): Promise<boolean> {
-    if (!this.wallet) {
-      throw new Error('Lemma wallet not initialized');
-    }
-
-    try {
-      await this.wallet.unlock();
-      return true;
-    } catch (error) {
-      console.error('Wallet unlock failed:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Sign in with passkey - handles both registration and authentication
+   * Sign in using Lemma central wallet
    */
   async signIn(): Promise<LemmaUser | null> {
-    if (!this.wallet || !this.config) {
+    if (!this.lemmaIAM || !this.config) {
       throw new Error('Lemma not initialized');
     }
 
     try {
-      // Check wallet state
-      const info = await this.getWalletInfo();
+      const result = await this.lemmaIAM.signIn();
       
-      // Register passkey if none exists, otherwise unlock
-      if (info.hasPasskey) {
-        await this.unlockWallet();
-      } else {
-        await this.registerPasskey();
+      if (result && result.success) {
+        return {
+          ppid: result.ppid || result.user_did,
+          email: result.email,
+          siteId: this.config.siteId,
+          permissions: result.permissions || [],
+          credential: result.credential || result,
+        };
       }
-
-      // Get wallet secret for credential issuance
-      const walletSecret = await this.wallet.getWalletSecret();
-
-      // Request permission credential from Lemma
-      const response = await fetch('https://lemma.id/api/wallet-auth/issue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          site_id: this.config.siteId,
-          wallet_secret: walletSecret,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to get credential');
-      }
-
-      // Store the credential in the wallet
-      await this.wallet.storeCredential(data.permission_lemma);
-
-      return {
-        ppid: data.ppid,
-        siteId: this.config.siteId,
-        permissions: data.permission_lemma?.claims?.permissions || [],
-        credential: data.permission_lemma,
-      };
+      
+      return null;
     } catch (error) {
       console.error('Sign in failed:', error);
       return null;
@@ -195,38 +123,38 @@ class LemmaAuthService {
   }
 
   /**
-   * Check if user is authenticated (has valid credential for this site)
+   * Check if user is authenticated
    */
   async isAuthenticated(): Promise<boolean> {
-    if (!this.wallet || !this.config) {
+    if (!this.lemmaIAM) {
       return false;
     }
 
     try {
-      const cred = await this.wallet.getCredential('permission', this.config.siteId);
-      return !!cred;
+      return await this.lemmaIAM.isAuthenticated();
     } catch {
       return false;
     }
   }
 
   /**
-   * Get current user from stored credential
+   * Get current user
    */
   async getCurrentUser(): Promise<LemmaUser | null> {
-    if (!this.wallet || !this.config) {
+    if (!this.lemmaIAM || !this.config) {
       return null;
     }
 
     try {
-      const cred = await this.wallet.getCredential('permission', this.config.siteId);
-      if (!cred) return null;
+      const user = await this.lemmaIAM.getUser();
+      if (!user) return null;
 
       return {
-        ppid: cred.subject || cred.claims?.ppid,
+        ppid: user.ppid || user.did || user.user_did,
+        email: user.email,
         siteId: this.config.siteId,
-        permissions: cred.claims?.permissions || [],
-        credential: cred,
+        permissions: user.permissions || user.role ? [user.role] : [],
+        credential: user,
       };
     } catch {
       return null;
@@ -234,68 +162,62 @@ class LemmaAuthService {
   }
 
   /**
-   * Verify access to a specific resource (client-side, ~30µs)
+   * Verify access to a specific resource
    */
   async verifyAccess(
     resource: string, 
     action: 'read' | 'write' | 'delete' = 'read'
   ): Promise<{ hasAccess: boolean; verificationTimeUs: number }> {
-    if (!this.wallet || !this.config) {
+    if (!this.lemmaIAM) {
       return { hasAccess: false, verificationTimeUs: 0 };
     }
 
     try {
-      const start = performance.now();
-      const cred = await this.wallet.getCredential('permission', this.config.siteId);
-      
-      if (!cred) {
-        return { hasAccess: false, verificationTimeUs: 0 };
-      }
-
-      // Check if credential grants access to resource
-      const scope = cred.claims?.scope || [];
-      const hasAccess = scope.includes('*') || 
-        scope.some((s: string) => {
-          if (s === '*') return true;
-          if (s.endsWith(':*')) {
-            const resourcePath = s.replace(':*', '');
-            return resource.startsWith(resourcePath);
-          }
-          const [path, act] = s.split(':');
-          return resource.startsWith(path) && (act === '*' || act === action);
-        });
-
-      const verificationTimeUs = (performance.now() - start) * 1000;
-      return { hasAccess, verificationTimeUs };
+      const result = await this.lemmaIAM.verifyAccess(resource, action);
+      return {
+        hasAccess: result.hasAccess || result.has_access || false,
+        verificationTimeUs: result.verificationTimeUs || result.verification_time_us || 0,
+      };
     } catch {
       return { hasAccess: false, verificationTimeUs: 0 };
     }
   }
 
   /**
-   * Sign out - clear credentials from wallet
+   * Sign out
    */
   async signOut(): Promise<void> {
-    if (this.wallet && this.config) {
+    if (this.lemmaIAM) {
       try {
-        await this.wallet.removeCredential('permission', this.config.siteId);
+        await this.lemmaIAM.signOut();
       } catch {
         // Ignore errors during sign out
       }
     }
     
-    // Clear local storage
     localStorage.removeItem('lemma_user');
+  }
+
+  /**
+   * Get storage info
+   */
+  getStorageInfo(): any {
+    if (!this.lemmaIAM) return null;
+    try {
+      return this.lemmaIAM.getStorageInfo();
+    } catch {
+      return null;
+    }
   }
 
   /**
    * Get Surv role from Lemma permissions
    */
   getSurvRoleFromPermissions(permissions: string[]): string {
-    if (permissions.includes(SURV_PERMISSIONS.ADMIN) || permissions.includes('*')) {
+    if (permissions.includes(SURV_PERMISSIONS.ADMIN) || permissions.includes('admin') || permissions.includes('*')) {
       return 'admin';
     }
-    if (permissions.includes(SURV_PERMISSIONS.MANAGER)) {
+    if (permissions.includes(SURV_PERMISSIONS.MANAGER) || permissions.includes('manager')) {
       return 'manager';
     }
     return 'technician';
