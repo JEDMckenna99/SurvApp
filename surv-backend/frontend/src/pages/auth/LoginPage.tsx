@@ -24,28 +24,31 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [lemmaReady, setLemmaReady] = useState(false)
+  const [walletInfo, setWalletInfo] = useState<{ hasPasskey: boolean } | null>(null)
   const navigate = useNavigate()
   const dispatch = useDispatch()
 
-  // Initialize Lemma IAM SDK on mount
+  // Initialize Lemma Wallet SDK on mount
   useEffect(() => {
     const initLemma = async () => {
       try {
         // Fetch Lemma config from backend
         const configResponse = await apiClient.get('/api/v1/auth/lemma-config')
         const siteId = configResponse.data.site_id || ''
-        const apiKey = configResponse.data.api_key || ''
 
-        if (siteId && apiKey && configResponse.data.configured) {
+        if (siteId && configResponse.data.configured) {
           await lemmaAuth.initialize({
-            apiKey,
             siteId,
-            debug: true, // Enable debug for troubleshooting
+            debug: true,
           })
           
           setLemmaReady(true)
 
-          // Check if already authenticated with central wallet
+          // Check wallet status
+          const info = await lemmaAuth.getWalletInfo()
+          setWalletInfo(info)
+
+          // Check if already authenticated with stored credential
           try {
             const isAuth = await lemmaAuth.isAuthenticated()
             if (isAuth) {
@@ -76,8 +79,8 @@ export default function LoginPage() {
     try {
       // Verify with backend and get/create user record
       const response = await apiClient.post('/api/v1/auth/lemma-verify', {
-        user_did: lemmaUser.ppid || lemmaUser.did,
-        user_email: lemmaUser.email || `${(lemmaUser.ppid || lemmaUser.did || '').slice(-8)}@wallet.lemma.id`,
+        user_did: lemmaUser.ppid,
+        user_email: `${(lemmaUser.ppid || '').slice(-8)}@wallet.lemma.id`,
         permissions: lemmaUser.permissions || [],
         lemmas: lemmaUser.credential ? [lemmaUser.credential] : [],
       })
@@ -99,7 +102,7 @@ export default function LoginPage() {
     }
   }
 
-  // Sign in with Lemma central wallet
+  // Sign in with Lemma wallet (passkey)
   const handleSignIn = async () => {
     setError('')
     setAuthStep('authenticating')
@@ -113,7 +116,8 @@ export default function LoginPage() {
         throw new Error('Authentication cancelled or failed')
       }
     } catch (err: any) {
-      setError(err.message || 'Authentication failed')
+      console.error('Sign in error:', err)
+      setError(err.message || 'Authentication failed. Please try again.')
       setAuthStep('error')
     }
   }
@@ -190,7 +194,10 @@ export default function LoginPage() {
                   color="text.secondary" 
                   sx={{ mb: 3 }}
                 >
-                  Sign in with your Lemma wallet
+                  {walletInfo?.hasPasskey 
+                    ? 'Sign in with your passkey' 
+                    : 'Create your secure wallet'
+                  }
                 </Typography>
 
                 <Button
@@ -205,12 +212,15 @@ export default function LoginPage() {
                     fontWeight: 600,
                   }}
                 >
-                  Sign In with Lemma
+                  {walletInfo?.hasPasskey 
+                    ? '🔐 Sign In with Passkey' 
+                    : '🔐 Create Passkey & Sign In'
+                  }
                 </Button>
 
                 <Divider sx={{ my: 3 }}>
                   <Typography variant="caption" color="text.secondary">
-                    Passwordless authentication
+                    {walletInfo?.hasPasskey ? 'Touch ID · Face ID · Windows Hello' : 'No password needed'}
                   </Typography>
                 </Divider>
 
@@ -221,8 +231,8 @@ export default function LoginPage() {
                   border: '1px solid rgba(25, 118, 210, 0.1)',
                 }}>
                   <Typography variant="caption" color="text.secondary" component="div">
-                    Powered by <strong>Lemma</strong> secure authentication.
-                    Your credentials are stored in your Lemma wallet at lemma.id
+                    Powered by <strong>Lemma</strong> wallet-based authentication.
+                    Your credentials are protected by your device's biometrics.
                   </Typography>
                 </Box>
               </Box>
@@ -256,7 +266,7 @@ export default function LoginPage() {
                 </Typography>
                 
                 <Typography variant="body2" color="text.secondary">
-                  Complete the sign-in in the Lemma popup
+                  Complete the passkey prompt on your device
                 </Typography>
               </Box>
             </Fade>
