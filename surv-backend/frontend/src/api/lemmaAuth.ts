@@ -82,7 +82,7 @@ class LemmaAuthService {
       }
 
       const script = document.createElement('script');
-      script.src = 'https://lemma.id/static/js/lemma-wallet.js?v=1130';
+      script.src = 'https://lemma.id/static/js/lemma-wallet.js';
       script.async = true;
       script.onload = () => resolve();
       script.onerror = () => reject(new Error('Failed to load Lemma Wallet SDK'));
