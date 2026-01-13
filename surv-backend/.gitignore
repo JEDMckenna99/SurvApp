@@ -25,4 +25,3 @@ create_test_data.py
 create_sample_data_heroku.py
 test_api.py
 surv_dev.db
-
