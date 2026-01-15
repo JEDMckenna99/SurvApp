@@ -1,8 +1,8 @@
 /**
- * Lemma Wallet Authentication Service
+ * Lemma Wallet Authentication Service v2.9.0
  * 
- * Wallet-first architecture with passkey authentication.
- * Uses LemmaWallet SDK with /api/wallet-auth/issue endpoint.
+ * Smart auto-authentication with wallet-first architecture.
+ * Users who unlock once on lemma.id auto-sign-in with zero clicks.
  * 
  * Documentation: https://lemma.id/docs
  */
@@ -22,8 +22,25 @@ export interface LemmaConfig {
 export interface LemmaUser {
   ppid: string;
   siteId: string;
+  walletSecret: string;
   permissions: string[];
   credential: any;
+}
+
+// v2.9.0 SDK types
+export interface AutoAuthResult {
+  authenticated: boolean;
+  walletSecret?: string;
+  needsPasskey?: boolean;
+  message?: string;
+}
+
+export interface AuthState {
+  hasWallet: boolean;
+  isUnlocked: boolean;
+  walletSecret?: string;
+  suggestedAction: 'register' | 'unlock' | 'ready';
+  suggestedButtonText: string;
 }
 
 // Permission level mapping for Surv roles
@@ -91,28 +108,117 @@ class LemmaAuthService {
   }
 
   /**
-   * Sign in using Lemma wallet
+   * v2.9.0 Smart Auto-Authentication
+   * Checks if wallet is already unlocked (e.g., from lemma.id)
+   * Returns authentication state for zero-click sign-in
    */
-  async signIn(): Promise<LemmaUser | null> {
-    if (!this.wallet || !this.config) {
+  async autoAuthenticate(): Promise<AutoAuthResult> {
+    if (!this.wallet) {
+      return { authenticated: false, message: 'Wallet not initialized' };
+    }
+
+    try {
+      const result = await this.wallet.autoAuthenticate();
+      console.log('Auto-auth result:', result);
+      return result;
+    } catch (error) {
+      console.error('Auto-authenticate failed:', error);
+      return { authenticated: false, needsPasskey: true };
+    }
+  }
+
+  /**
+   * v2.9.0 Get Authentication State
+   * Returns wallet state and suggested button text
+   */
+  async getAuthState(): Promise<AuthState> {
+    if (!this.wallet) {
+      return {
+        hasWallet: false,
+        isUnlocked: false,
+        suggestedAction: 'register',
+        suggestedButtonText: 'Create Passkey & Sign In',
+      };
+    }
+
+    try {
+      const state = await this.wallet.getAuthState();
+      return {
+        hasWallet: state.hasWallet ?? false,
+        isUnlocked: state.isUnlocked ?? false,
+        walletSecret: state.walletSecret,
+        suggestedAction: state.suggestedAction || (state.hasWallet ? 'unlock' : 'register'),
+        suggestedButtonText: state.suggestedButtonText || 
+          (state.hasWallet ? 'Unlock Wallet & Sign In' : 'Create Passkey & Sign In'),
+      };
+    } catch (error) {
+      console.error('Get auth state failed:', error);
+      return {
+        hasWallet: false,
+        isUnlocked: false,
+        suggestedAction: 'register',
+        suggestedButtonText: 'Create Passkey & Sign In',
+      };
+    }
+  }
+
+  /**
+   * Register or use passkey to get wallet secret
+   */
+  async registerPasskey(): Promise<{ walletSecret?: string; success: boolean }> {
+    if (!this.wallet) {
+      throw new Error('Wallet not initialized');
+    }
+
+    try {
+      const result = await this.wallet.registerPasskey();
+      const walletSecret = result?.walletSecret || await this.wallet.getWalletSecret();
+      return { walletSecret, success: true };
+    } catch (error) {
+      console.error('Register passkey failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Unlock existing wallet with passkey
+   */
+  async unlockWallet(): Promise<{ walletSecret?: string; success: boolean }> {
+    if (!this.wallet) {
+      throw new Error('Wallet not initialized');
+    }
+
+    try {
+      await this.wallet.unlock();
+      const walletSecret = await this.wallet.getWalletSecret();
+      return { walletSecret, success: true };
+    } catch (error) {
+      console.error('Unlock wallet failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get wallet secret (after authenticated)
+   */
+  async getWalletSecret(): Promise<string | null> {
+    if (!this.wallet) return null;
+    try {
+      return await this.wallet.getWalletSecret();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Sign in using wallet secret - issues credential from Lemma API
+   */
+  async signInWithWalletSecret(walletSecret: string): Promise<LemmaUser | null> {
+    if (!this.config) {
       throw new Error('Lemma not initialized');
     }
 
     try {
-      // Check if user has an existing passkey/wallet
-      const info = await this.wallet.getWalletInfo();
-      
-      if (info.hasPasskey) {
-        // Unlock existing wallet with passkey
-        await this.wallet.unlock();
-      } else {
-        // Register new passkey
-        await this.wallet.registerPasskey();
-      }
-
-      // Get wallet secret for credential issuance
-      const walletSecret = await this.wallet.getWalletSecret();
-      
       // Request credential from Lemma API
       const response = await fetch('https://lemma.id/api/wallet-auth/issue', {
         method: 'POST',
@@ -126,20 +232,80 @@ class LemmaAuthService {
       });
 
       const data = await response.json();
+      console.log('Credential issue response:', data);
       
       if (data.success && data.permission_lemma) {
-        // Store credential in wallet
-        await this.wallet.storeCredential(data.permission_lemma);
+        // Store credential in wallet if available
+        if (this.wallet?.storeCredential) {
+          await this.wallet.storeCredential(data.permission_lemma);
+        }
         
         return {
           ppid: data.ppid,
           siteId: this.config.siteId,
+          walletSecret,
           permissions: data.permissions || [],
           credential: data.permission_lemma,
         };
       }
       
+      // Return basic user even without full credential
+      if (data.ppid) {
+        return {
+          ppid: data.ppid,
+          siteId: this.config.siteId,
+          walletSecret,
+          permissions: data.permissions || [],
+          credential: null,
+        };
+      }
+      
       return null;
+    } catch (error) {
+      console.error('Sign in with wallet secret failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Legacy sign in method (uses new v2.9.0 methods internally)
+   */
+  async signIn(): Promise<LemmaUser | null> {
+    if (!this.wallet || !this.config) {
+      throw new Error('Lemma not initialized');
+    }
+
+    try {
+      // First try auto-authenticate
+      const autoResult = await this.autoAuthenticate();
+      
+      if (autoResult.authenticated && autoResult.walletSecret) {
+        return await this.signInWithWalletSecret(autoResult.walletSecret);
+      }
+
+      // Need passkey interaction
+      const state = await this.getAuthState();
+      let walletSecret: string | undefined;
+
+      if (state.hasWallet) {
+        // Unlock existing wallet
+        const unlockResult = await this.unlockWallet();
+        walletSecret = unlockResult.walletSecret;
+      } else {
+        // Register new passkey
+        const regResult = await this.registerPasskey();
+        walletSecret = regResult.walletSecret;
+      }
+
+      if (!walletSecret) {
+        walletSecret = await this.getWalletSecret() || undefined;
+      }
+
+      if (!walletSecret) {
+        throw new Error('Failed to get wallet secret');
+      }
+
+      return await this.signInWithWalletSecret(walletSecret);
     } catch (error) {
       console.error('Sign in failed:', error);
       throw error;
@@ -156,11 +322,12 @@ class LemmaAuthService {
 
     try {
       // Check if wallet is authenticated and has credential for this site
-      if (!this.wallet.isAuthenticated()) {
+      const authCheck = this.wallet.isAuthenticated?.();
+      if (authCheck === false) {
         return false;
       }
       
-      const cred = await this.wallet.getCredential('permission', this.config.siteId);
+      const cred = await this.wallet.getCredential?.('permission', this.config.siteId);
       return !!cred;
     } catch {
       return false;
@@ -176,12 +343,15 @@ class LemmaAuthService {
     }
 
     try {
-      const cred = await this.wallet.getCredential('permission', this.config.siteId);
+      const cred = await this.wallet.getCredential?.('permission', this.config.siteId);
       if (!cred) return null;
+
+      const walletSecret = await this.getWalletSecret();
 
       return {
         ppid: cred.ppid || cred.subject_did,
         siteId: this.config.siteId,
+        walletSecret: walletSecret || '',
         permissions: cred.permissions || cred.scope || [],
         credential: cred,
       };
@@ -203,7 +373,7 @@ class LemmaAuthService {
 
     try {
       const start = performance.now();
-      const cred = await this.wallet.getCredential('permission', this.config.siteId);
+      const cred = await this.wallet.getCredential?.('permission', this.config.siteId);
       
       if (!cred) {
         return { hasAccess: false, verificationTimeUs: 0 };
@@ -242,12 +412,20 @@ class LemmaAuthService {
   }
 
   /**
-   * Get wallet info
+   * Get wallet info (legacy method)
    */
   async getWalletInfo(): Promise<{ hasPasskey: boolean; isLocked: boolean } | null> {
     if (!this.wallet) return null;
     try {
-      return await this.wallet.getWalletInfo();
+      const info = await this.wallet.getWalletInfo?.();
+      if (info) return info;
+      
+      // Fallback to getAuthState
+      const state = await this.getAuthState();
+      return {
+        hasPasskey: state.hasWallet,
+        isLocked: !state.isUnlocked,
+      };
     } catch {
       return null;
     }
