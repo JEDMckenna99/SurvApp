@@ -450,6 +450,54 @@ class LemmaAuthService {
   isInitialized(): boolean {
     return this.initialized;
   }
+
+  /**
+   * Check if the session is still valid (wallet not locked remotely)
+   */
+  async isSessionValid(): Promise<boolean> {
+    if (!this.wallet) return false;
+    try {
+      const isValid = await this.wallet.isSessionValid?.();
+      return isValid ?? true; // Assume valid if method not available
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Register callback for session expiry (remote wallet lock)
+   * Returns cleanup function to remove the listener
+   */
+  onSessionExpired(callback: (event?: any) => void): () => void {
+    if (!this.wallet) {
+      console.warn('Cannot register session expiry handler - wallet not initialized');
+      return () => {};
+    }
+
+    try {
+      this.wallet.onSessionExpired?.(callback);
+      console.log('Session expiry handler registered');
+      
+      // Return cleanup function
+      return () => {
+        // Stop heartbeat if running
+        if (this.wallet?._heartbeatInterval) {
+          clearInterval(this.wallet._heartbeatInterval);
+          console.log('Heartbeat interval cleared');
+        }
+      };
+    } catch (error) {
+      console.error('Failed to register session expiry handler:', error);
+      return () => {};
+    }
+  }
+
+  /**
+   * Get the raw wallet instance (for advanced use cases)
+   */
+  getWallet(): any {
+    return this.wallet;
+  }
 }
 
 // Export singleton instance
