@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDispatch } from 'react-redux'
 import {
@@ -25,6 +25,8 @@ export default function LoginPage() {
   const [lemmaReady, setLemmaReady] = useState(false)
   const [authState, setAuthState] = useState<AuthState | null>(null)
   const [buttonText, setButtonText] = useState('Sign In')
+  const [linkDeviceHtml, setLinkDeviceHtml] = useState<string | null>(null)
+  const linkContainerRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
   const dispatch = useDispatch()
 
@@ -206,6 +208,13 @@ export default function LoginPage() {
 
           // Set appropriate button text based on state
           setButtonText(state.suggestedButtonText || 'Sign In with Passkey')
+
+          // v2.20.0: Get link device HTML for users with wallets on other devices
+          const linkHtml = await lemmaAuth.getLinkDeviceHtml()
+          if (linkHtml) {
+            setLinkDeviceHtml(linkHtml)
+          }
+
           setAuthStep('ready')
         } else {
           setAuthStep('ready')
@@ -217,6 +226,13 @@ export default function LoginPage() {
     }
     initLemma()
   }, [signInWithWalletSecret, onSignInSuccess, dispatch])
+
+  // Inject link device HTML when it changes
+  useEffect(() => {
+    if (linkDeviceHtml && linkContainerRef.current) {
+      linkContainerRef.current.innerHTML = linkDeviceHtml
+    }
+  }, [linkDeviceHtml])
 
   // Reset to ready state
   const handleTryAgain = () => {
@@ -310,6 +326,26 @@ export default function LoginPage() {
                 >
                   🔐 {buttonText}
                 </Button>
+
+                {/* Link existing wallet from another device */}
+                <Box
+                  ref={linkContainerRef}
+                  sx={{
+                    mt: 2,
+                    '& .lemma-link-device': {
+                      textAlign: 'center',
+                      fontSize: '0.85rem',
+                    },
+                    '& a': {
+                      color: 'primary.main',
+                      textDecoration: 'none',
+                      fontWeight: 500,
+                      '&:hover': {
+                        textDecoration: 'underline',
+                      },
+                    },
+                  }}
+                />
 
                 <Divider sx={{ my: 3 }}>
                   <Typography variant="caption" color="text.secondary">

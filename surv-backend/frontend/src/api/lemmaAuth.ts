@@ -498,6 +498,29 @@ class LemmaAuthService {
   getWallet(): any {
     return this.wallet;
   }
+
+  /**
+   * Get link device HTML for users who want to link an existing wallet from another device
+   * Returns null if user is already signed in or linking isn't available
+   */
+  async getLinkDeviceHtml(options?: {
+    text?: string;
+    linkText?: string;
+    className?: string;
+  }): Promise<string | null> {
+    if (!this.wallet) {
+      console.warn('Cannot get link device HTML - wallet not initialized');
+      return null;
+    }
+
+    try {
+      const linkHtml = await this.wallet.getLinkDeviceHtml?.(options);
+      return linkHtml || null;
+    } catch (error) {
+      console.error('Failed to get link device HTML:', error);
+      return null;
+    }
+  }
 }
 
 // Export singleton instance
