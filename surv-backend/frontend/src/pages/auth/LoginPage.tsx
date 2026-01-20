@@ -30,27 +30,21 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const dispatch = useDispatch()
 
-  // Sign in with wallet secret - verifies with backend
-  const signInWithWalletSecret = useCallback(async (walletSecret: string): Promise<{ userExists: boolean; user?: any }> => {
+  // Authenticate with PPID - sends to OUR backend (not lemma.id)
+  const authenticateWithPPID = useCallback(async (ppid: string): Promise<{ userExists: boolean; user?: any }> => {
     try {
-      // Get user from Lemma credential
-      const lemmaUser = await lemmaAuth.signInWithWalletSecret(walletSecret)
-      
-      if (!lemmaUser) {
-        return { userExists: false }
-      }
-
-      // Verify with backend and get/create user record
+      // Send PPID to YOUR backend - NO network call to lemma.id needed
+      // Backend will either sign in existing user or create new account
       const response = await apiClient.post('/api/v1/auth/lemma-verify', {
-        user_did: lemmaUser.ppid,
-        user_email: `${(lemmaUser.ppid || '').slice(-8)}@wallet.lemma.id`,
-        permissions: lemmaUser.permissions || [],
-        lemmas: lemmaUser.credential ? [lemmaUser.credential] : [],
+        user_did: ppid,
+        user_email: `${ppid.slice(-8)}@wallet.lemma.id`,
+        permissions: [],
+        lemmas: [],
       })
 
       return { userExists: true, user: response.data }
     } catch (err: any) {
-      console.error('Sign in with wallet secret failed:', err)
+      console.error('Authentication with PPID failed:', err)
       // Check if it's a "user not found" type error
       if (err.response?.status === 404) {
         return { userExists: false }
@@ -71,13 +65,13 @@ export default function LoginPage() {
     navigate('/')
   }, [dispatch, navigate])
 
-  // Create account with wallet secret
-  const createAccount = useCallback(async (walletSecret: string) => {
+  // Create account with PPID
+  const createAccountWithPPID = useCallback(async (ppid: string) => {
     setAuthStep('creating-account')
     dispatch(loginStart())
 
     try {
-      const result = await signInWithWalletSecret(walletSecret)
+      const result = await authenticateWithPPID(ppid)
       
       if (result.user) {
         onSignInSuccess(result.user)
@@ -89,65 +83,53 @@ export default function LoginPage() {
       setError(err.message || 'Account creation failed')
       setAuthStep('error')
     }
-  }, [signInWithWalletSecret, onSignInSuccess, dispatch])
+  }, [authenticateWithPPID, onSignInSuccess, dispatch])
 
-  // v2.9.0 Smart Sign In Handler
+  // Smart Sign In Handler - uses getAuthenticatedPPID (local derivation, no network call to lemma.id)
   const handleLemmaSignIn = useCallback(async () => {
     setError('')
     setAuthStep('authenticating')
     dispatch(loginStart())
 
     try {
-      // Step 1: Try auto-authenticate (checks if wallet already unlocked)
-      const autoResult = await lemmaAuth.autoAuthenticate()
-      console.log('Auto-auth result:', autoResult)
+      // Step 1: Check if already authenticated (wallet unlocked)
+      const authResult = await lemmaAuth.getAuthenticatedPPID()
+      console.log('getAuthenticatedPPID result:', authResult)
 
-      if (autoResult.authenticated && autoResult.walletSecret) {
-        // User has unlocked wallet from lemma.id - try to sign in
+      if (authResult.authenticated && authResult.ppid) {
+        // Wallet is unlocked - we have the PPID
         setAuthStep('verifying')
-        const response = await signInWithWalletSecret(autoResult.walletSecret)
+        const response = await authenticateWithPPID(authResult.ppid)
 
         if (response.userExists && response.user) {
-          // SUCCESS: Auto sign-in complete!
+          // SUCCESS: Sign-in complete!
           onSignInSuccess(response.user)
           return
         } else {
-          // User has wallet but no account here - create account
-          await createAccount(autoResult.walletSecret)
+          // PPID exists but no account - create account
+          await createAccountWithPPID(authResult.ppid)
           return
         }
       }
 
-      // Step 2: No auto-auth - need passkey interaction
-      const state = await lemmaAuth.getAuthState()
-      let walletSecret: string | undefined
+      // Step 2: User needs to unlock wallet first
+      // Use unlockWithPopup() to trigger passkey/biometric prompt
+      console.log('Wallet not unlocked - triggering unlock popup...')
+      const unlockResult = await lemmaAuth.unlockWithPopup()
+      console.log('unlockWithPopup result:', unlockResult)
 
-      if (state.hasWallet) {
-        // Unlock existing wallet
-        const unlockResult = await lemmaAuth.unlockWallet()
-        walletSecret = unlockResult.walletSecret
+      if (unlockResult.authenticated && unlockResult.ppid) {
+        // Now we have the PPID - send to backend
+        setAuthStep('verifying')
+        const response = await authenticateWithPPID(unlockResult.ppid)
+
+        if (response.userExists && response.user) {
+          onSignInSuccess(response.user)
+        } else {
+          await createAccountWithPPID(unlockResult.ppid)
+        }
       } else {
-        // Register new passkey
-        const regResult = await lemmaAuth.registerPasskey()
-        walletSecret = regResult.walletSecret
-      }
-
-      if (!walletSecret) {
-        walletSecret = await lemmaAuth.getWalletSecret() || undefined
-      }
-
-      if (!walletSecret) {
-        throw new Error('Failed to get wallet secret')
-      }
-
-      // Sign in with the wallet secret
-      setAuthStep('verifying')
-      const response = await signInWithWalletSecret(walletSecret)
-
-      if (response.userExists && response.user) {
-        onSignInSuccess(response.user)
-      } else {
-        await createAccount(walletSecret)
+        throw new Error('Authentication cancelled or failed')
       }
     } catch (err: any) {
       console.error('Sign in error:', err)
@@ -155,7 +137,7 @@ export default function LoginPage() {
       setError(err.message || 'Authentication failed. Please try again.')
       setAuthStep('error')
     }
-  }, [signInWithWalletSecret, onSignInSuccess, createAccount, dispatch])
+  }, [authenticateWithPPID, onSignInSuccess, createAccountWithPPID, dispatch])
 
   // Initialize Lemma Wallet SDK and check for auto-auth on mount
   useEffect(() => {
@@ -173,29 +155,32 @@ export default function LoginPage() {
           
           setLemmaReady(true)
 
-          // v2.9.0: Check auth state for button text
+          // Check auth state for button text
           setAuthStep('auto-auth')
           const state = await lemmaAuth.getAuthState()
           setAuthState(state)
           console.log('Auth state:', state)
 
-          // Check if wallet is already unlocked - auto sign-in!
-          if (state.isUnlocked && state.walletSecret) {
-            console.log('Wallet unlocked - attempting auto sign-in...')
+          // Check if already authenticated - use getAuthenticatedPPID (local, no network call)
+          const authResult = await lemmaAuth.getAuthenticatedPPID()
+          console.log('getAuthenticatedPPID on load:', authResult)
+
+          if (authResult.authenticated && authResult.ppid) {
+            console.log('Already authenticated - attempting auto sign-in...')
             setButtonText('Signing in...')
             
             try {
               dispatch(loginStart())
               setAuthStep('verifying')
               
-              const response = await signInWithWalletSecret(state.walletSecret)
+              const response = await authenticateWithPPID(authResult.ppid)
               
               if (response.userExists && response.user) {
                 // Auto sign-in success!
                 onSignInSuccess(response.user)
                 return
               } else {
-                // Wallet exists but no account - show create account
+                // PPID exists but no account - show create account
                 setButtonText('Create Account')
                 setAuthStep('ready')
               }
@@ -209,7 +194,7 @@ export default function LoginPage() {
           // Set appropriate button text based on state
           setButtonText(state.suggestedButtonText || 'Sign In with Passkey')
 
-          // v2.20.0: Get link device HTML for users with wallets on other devices
+          // Get link device HTML for users with wallets on other devices
           const linkHtml = await lemmaAuth.getLinkDeviceHtml()
           if (linkHtml) {
             setLinkDeviceHtml(linkHtml)
@@ -225,7 +210,7 @@ export default function LoginPage() {
       }
     }
     initLemma()
-  }, [signInWithWalletSecret, onSignInSuccess, dispatch])
+  }, [authenticateWithPPID, onSignInSuccess, dispatch])
 
   // Inject link device HTML when it changes
   useEffect(() => {

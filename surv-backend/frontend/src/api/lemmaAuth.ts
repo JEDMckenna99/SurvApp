@@ -211,51 +211,62 @@ class LemmaAuthService {
   }
 
   /**
-   * Sign in using wallet secret - issues credential from Lemma API
+   * Get authenticated PPID using the SDK's local cryptographic derivation
+   * NO network call to lemma.id - PPID is derived client-side
    */
-  async signInWithWalletSecret(walletSecret: string): Promise<LemmaUser | null> {
-    if (!this.config) {
+  async getAuthenticatedPPID(): Promise<{ authenticated: boolean; ppid?: string }> {
+    if (!this.wallet) {
+      return { authenticated: false };
+    }
+
+    try {
+      const result = await this.wallet.getAuthenticatedPPID();
+      console.log('getAuthenticatedPPID result:', result);
+      return result;
+    } catch (error) {
+      console.error('getAuthenticatedPPID failed:', error);
+      return { authenticated: false };
+    }
+  }
+
+  /**
+   * Unlock wallet with popup (for user-initiated sign-in)
+   */
+  async unlockWithPopup(): Promise<{ authenticated: boolean; ppid?: string }> {
+    if (!this.wallet) {
+      throw new Error('Wallet not initialized');
+    }
+
+    try {
+      const result = await this.wallet.unlockWithPopup();
+      console.log('unlockWithPopup result:', result);
+      return result;
+    } catch (error) {
+      console.error('unlockWithPopup failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Sign in using wallet secret - derives PPID locally (no network call to lemma.id)
+   * @deprecated Use getAuthenticatedPPID() instead for cleaner code
+   */
+  async signInWithWalletSecret(_walletSecret: string): Promise<LemmaUser | null> {
+    if (!this.config || !this.wallet) {
       throw new Error('Lemma not initialized');
     }
 
     try {
-      // Request credential from Lemma API
-      const response = await fetch('https://lemma.id/api/wallet-auth/issue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          site_id: this.config.siteId,
-          wallet_secret: walletSecret,
-        }),
-      });
-
-      const data = await response.json();
-      console.log('Credential issue response:', data);
+      // Use SDK's local PPID derivation - NO network call to lemma.id
+      const result = await this.wallet.getAuthenticatedPPID();
+      console.log('getAuthenticatedPPID result:', result);
       
-      if (data.success && data.permission_lemma) {
-        // Store credential in wallet if available
-        if (this.wallet?.storeCredential) {
-          await this.wallet.storeCredential(data.permission_lemma);
-        }
-        
+      if (result.authenticated && result.ppid) {
         return {
-          ppid: data.ppid,
+          ppid: result.ppid,
           siteId: this.config.siteId,
-          walletSecret,
-          permissions: data.permissions || [],
-          credential: data.permission_lemma,
-        };
-      }
-      
-      // Return basic user even without full credential
-      if (data.ppid) {
-        return {
-          ppid: data.ppid,
-          siteId: this.config.siteId,
-          walletSecret,
-          permissions: data.permissions || [],
+          walletSecret: _walletSecret,
+          permissions: [], // Permissions come from your backend
           credential: null,
         };
       }
