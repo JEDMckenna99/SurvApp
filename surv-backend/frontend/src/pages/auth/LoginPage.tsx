@@ -118,18 +118,29 @@ export default function LoginPage() {
       const unlockResult = await lemmaAuth.unlockWithPopup()
       console.log('unlockWithPopup result:', unlockResult)
 
-      if (unlockResult.authenticated && unlockResult.ppid) {
+      // After unlock, get the PPID (unlockWithPopup may not return it directly)
+      let ppid = unlockResult.ppid
+      
+      if (!ppid) {
+        // Wallet was unlocked, now get the PPID
+        console.log('Wallet unlocked, fetching PPID...')
+        const ppidResult = await lemmaAuth.getAuthenticatedPPID()
+        console.log('getAuthenticatedPPID after unlock:', ppidResult)
+        ppid = ppidResult.ppid
+      }
+
+      if (ppid) {
         // Now we have the PPID - send to backend
         setAuthStep('verifying')
-        const response = await authenticateWithPPID(unlockResult.ppid)
+        const response = await authenticateWithPPID(ppid)
 
         if (response.userExists && response.user) {
           onSignInSuccess(response.user)
         } else {
-          await createAccountWithPPID(unlockResult.ppid)
+          await createAccountWithPPID(ppid)
         }
       } else {
-        throw new Error('Authentication cancelled or failed')
+        throw new Error('Could not get user identity after wallet unlock')
       }
     } catch (err: any) {
       console.error('Sign in error:', err)
