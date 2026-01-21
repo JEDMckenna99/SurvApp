@@ -85,78 +85,91 @@ export default function LoginPage() {
     }
   }, [authenticateWithPPID, onSignInSuccess, dispatch])
 
-  // Sign In Handler - uses signInWithLemma (correct implementation)
+  // Sign In Handler - handles all wallet states correctly
   const handleLemmaSignIn = useCallback(async () => {
     setError('')
     setAuthStep('authenticating')
     dispatch(loginStart())
 
     try {
-      // Step 1: Try to get authenticated PPID
-      const result = await lemmaAuth.signInWithLemma()
+      // Step 1: Check current auth state
+      const state = await lemmaAuth.getAuthState()
+      console.log('Current auth state:', state)
+
+      // Step 2: Try to get authenticated PPID
+      let result = await lemmaAuth.signInWithLemma()
       console.log('signInWithLemma result:', result)
 
-      if (!result.authenticated) {
-        // Wallet not unlocked - may need passkey creation after device link
-        if (result.needsSetup) {
-          // User needs to create a passkey first
-          console.log('User needs to create passkey - triggering unlock popup...')
-          await lemmaAuth.unlockWithPopup()
-          
-          // Try again after popup
-          const retryResult = await lemmaAuth.signInWithLemma()
-          console.log('signInWithLemma retry result:', retryResult)
-          
-          if (retryResult.authenticated && retryResult.ppid) {
-            setAuthStep('verifying')
-            const response = await authenticateWithPPID(retryResult.ppid)
-            if (response.userExists && response.user) {
-              onSignInSuccess(response.user)
-            } else {
-              await createAccountWithPPID(retryResult.ppid)
-            }
-            return
-          }
-        }
-        
-        // Still not authenticated - try unlock popup
-        console.log('Wallet not unlocked - triggering unlock popup...')
-        await lemmaAuth.unlockWithPopup()
-        
-        // Try signInWithLemma again after unlock
-        const afterUnlock = await lemmaAuth.signInWithLemma()
-        console.log('signInWithLemma after unlock:', afterUnlock)
-        
-        if (!afterUnlock.authenticated || !afterUnlock.ppid) {
-          throw new Error('Could not authenticate after wallet unlock')
-        }
-        
-        // Continue with the PPID from after unlock
+      // If already authenticated, proceed
+      if (result.authenticated && result.ppid) {
         setAuthStep('verifying')
-        const response = await authenticateWithPPID(afterUnlock.ppid)
+        const response = await authenticateWithPPID(result.ppid)
         if (response.userExists && response.user) {
           onSignInSuccess(response.user)
         } else {
-          await createAccountWithPPID(afterUnlock.ppid)
+          await createAccountWithPPID(result.ppid)
         }
         return
       }
 
-      // Wallet is unlocked - we have the PPID
-      if (!result.ppid) {
-        throw new Error('Authenticated but no PPID returned')
+      // Step 3: Not authenticated - need to create or unlock passkey
+      console.log('Not authenticated. hasWallet:', state.hasWallet)
+      
+      if (state.hasWallet) {
+        // User has a wallet - try to unlock it
+        console.log('Unlocking existing wallet...')
+        try {
+          await lemmaAuth.unlockWallet()
+        } catch (unlockErr) {
+          console.error('Unlock failed:', unlockErr)
+          // Maybe try popup unlock as fallback
+          await lemmaAuth.unlockWithPopup()
+        }
+      } else {
+        // User needs to create a passkey first
+        console.log('Creating new passkey...')
+        await lemmaAuth.registerPasskey()
       }
       
-      setAuthStep('verifying')
-      const response = await authenticateWithPPID(result.ppid)
-
-      if (response.userExists && response.user) {
-        // SUCCESS: Sign-in complete!
-        onSignInSuccess(response.user)
-      } else {
-        // PPID exists but no account - create account
-        await createAccountWithPPID(result.ppid)
+      // Step 4: Try signInWithLemma again after passkey interaction
+      result = await lemmaAuth.signInWithLemma()
+      console.log('signInWithLemma after passkey interaction:', result)
+      
+      if (result.authenticated && result.ppid) {
+        setAuthStep('verifying')
+        const response = await authenticateWithPPID(result.ppid)
+        if (response.userExists && response.user) {
+          onSignInSuccess(response.user)
+        } else {
+          await createAccountWithPPID(result.ppid)
+        }
+        return
       }
+
+      // Step 5: Still not working - try one more approach
+      // Get wallet secret directly after passkey creation/unlock
+      console.log('Trying to get wallet secret directly...')
+      const walletSecret = await lemmaAuth.getWalletSecret()
+      console.log('Wallet secret obtained:', !!walletSecret)
+      
+      if (walletSecret) {
+        // We have a wallet secret - try getAuthenticatedPPID one more time
+        const finalResult = await lemmaAuth.getAuthenticatedPPID()
+        console.log('Final getAuthenticatedPPID result:', finalResult)
+        
+        if (finalResult.authenticated && finalResult.ppid) {
+          setAuthStep('verifying')
+          const response = await authenticateWithPPID(finalResult.ppid)
+          if (response.userExists && response.user) {
+            onSignInSuccess(response.user)
+          } else {
+            await createAccountWithPPID(finalResult.ppid)
+          }
+          return
+        }
+      }
+
+      throw new Error('Could not authenticate. Please try again or contact support.')
     } catch (err: any) {
       console.error('Sign in error:', err)
       dispatch(loginFailure())
