@@ -248,32 +248,39 @@ class LemmaAuthService {
   }
 
   /**
-   * Sign in using wallet secret - derives PPID locally (no network call to lemma.id)
-   * @deprecated Use getAuthenticatedPPID() instead for cleaner code
+   * Sign in with Lemma - the correct way
+   * Uses getAuthenticatedPPID() for local PPID derivation (no network call to lemma.id)
+   * Returns the PPID to send to YOUR backend
    */
-  async signInWithWalletSecret(_walletSecret: string): Promise<LemmaUser | null> {
-    if (!this.config || !this.wallet) {
+  async signInWithLemma(): Promise<{ 
+    authenticated: boolean; 
+    ppid?: string; 
+    needsSetup?: boolean;
+  }> {
+    if (!this.wallet) {
       throw new Error('Lemma not initialized');
     }
 
     try {
-      // Use SDK's local PPID derivation - NO network call to lemma.id
       const result = await this.wallet.getAuthenticatedPPID();
-      console.log('getAuthenticatedPPID result:', result);
+      console.log('signInWithLemma - getAuthenticatedPPID result:', result);
       
-      if (result.authenticated && result.ppid) {
-        return {
-          ppid: result.ppid,
-          siteId: this.config.siteId,
-          walletSecret: _walletSecret,
-          permissions: [], // Permissions come from your backend
-          credential: null,
-        };
+      if (!result.authenticated) {
+        // Wallet not unlocked - may need passkey creation after device link
+        if (result.needsPasskey) {
+          // User needs to create a passkey
+          return { authenticated: false, needsSetup: true };
+        }
+        return { authenticated: false };
       }
       
-      return null;
+      // Return the PPID to send to YOUR backend
+      return { 
+        authenticated: true, 
+        ppid: result.ppid 
+      };
     } catch (error) {
-      console.error('Sign in with wallet secret failed:', error);
+      console.error('signInWithLemma failed:', error);
       throw error;
     }
   }

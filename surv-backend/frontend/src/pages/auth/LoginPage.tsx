@@ -85,62 +85,77 @@ export default function LoginPage() {
     }
   }, [authenticateWithPPID, onSignInSuccess, dispatch])
 
-  // Smart Sign In Handler - uses getAuthenticatedPPID (local derivation, no network call to lemma.id)
+  // Sign In Handler - uses signInWithLemma (correct implementation)
   const handleLemmaSignIn = useCallback(async () => {
     setError('')
     setAuthStep('authenticating')
     dispatch(loginStart())
 
     try {
-      // Step 1: Check if already authenticated (wallet unlocked)
-      const authResult = await lemmaAuth.getAuthenticatedPPID()
-      console.log('getAuthenticatedPPID result:', authResult)
+      // Step 1: Try to get authenticated PPID
+      const result = await lemmaAuth.signInWithLemma()
+      console.log('signInWithLemma result:', result)
 
-      if (authResult.authenticated && authResult.ppid) {
-        // Wallet is unlocked - we have the PPID
-        setAuthStep('verifying')
-        const response = await authenticateWithPPID(authResult.ppid)
-
-        if (response.userExists && response.user) {
-          // SUCCESS: Sign-in complete!
-          onSignInSuccess(response.user)
-          return
-        } else {
-          // PPID exists but no account - create account
-          await createAccountWithPPID(authResult.ppid)
-          return
+      if (!result.authenticated) {
+        // Wallet not unlocked - may need passkey creation after device link
+        if (result.needsSetup) {
+          // User needs to create a passkey first
+          console.log('User needs to create passkey - triggering unlock popup...')
+          await lemmaAuth.unlockWithPopup()
+          
+          // Try again after popup
+          const retryResult = await lemmaAuth.signInWithLemma()
+          console.log('signInWithLemma retry result:', retryResult)
+          
+          if (retryResult.authenticated && retryResult.ppid) {
+            setAuthStep('verifying')
+            const response = await authenticateWithPPID(retryResult.ppid)
+            if (response.userExists && response.user) {
+              onSignInSuccess(response.user)
+            } else {
+              await createAccountWithPPID(retryResult.ppid)
+            }
+            return
+          }
         }
+        
+        // Still not authenticated - try unlock popup
+        console.log('Wallet not unlocked - triggering unlock popup...')
+        await lemmaAuth.unlockWithPopup()
+        
+        // Try signInWithLemma again after unlock
+        const afterUnlock = await lemmaAuth.signInWithLemma()
+        console.log('signInWithLemma after unlock:', afterUnlock)
+        
+        if (!afterUnlock.authenticated || !afterUnlock.ppid) {
+          throw new Error('Could not authenticate after wallet unlock')
+        }
+        
+        // Continue with the PPID from after unlock
+        setAuthStep('verifying')
+        const response = await authenticateWithPPID(afterUnlock.ppid)
+        if (response.userExists && response.user) {
+          onSignInSuccess(response.user)
+        } else {
+          await createAccountWithPPID(afterUnlock.ppid)
+        }
+        return
       }
 
-      // Step 2: User needs to unlock wallet first
-      // Use unlockWithPopup() to trigger passkey/biometric prompt
-      console.log('Wallet not unlocked - triggering unlock popup...')
-      const unlockResult = await lemmaAuth.unlockWithPopup()
-      console.log('unlockWithPopup result:', unlockResult)
-
-      // After unlock, get the PPID (unlockWithPopup may not return it directly)
-      let ppid = unlockResult.ppid
+      // Wallet is unlocked - we have the PPID
+      if (!result.ppid) {
+        throw new Error('Authenticated but no PPID returned')
+      }
       
-      if (!ppid) {
-        // Wallet was unlocked, now get the PPID
-        console.log('Wallet unlocked, fetching PPID...')
-        const ppidResult = await lemmaAuth.getAuthenticatedPPID()
-        console.log('getAuthenticatedPPID after unlock:', ppidResult)
-        ppid = ppidResult.ppid
-      }
+      setAuthStep('verifying')
+      const response = await authenticateWithPPID(result.ppid)
 
-      if (ppid) {
-        // Now we have the PPID - send to backend
-        setAuthStep('verifying')
-        const response = await authenticateWithPPID(ppid)
-
-        if (response.userExists && response.user) {
-          onSignInSuccess(response.user)
-        } else {
-          await createAccountWithPPID(ppid)
-        }
+      if (response.userExists && response.user) {
+        // SUCCESS: Sign-in complete!
+        onSignInSuccess(response.user)
       } else {
-        throw new Error('Could not get user identity after wallet unlock')
+        // PPID exists but no account - create account
+        await createAccountWithPPID(result.ppid)
       }
     } catch (err: any) {
       console.error('Sign in error:', err)
@@ -172,9 +187,9 @@ export default function LoginPage() {
           setAuthState(state)
           console.log('Auth state:', state)
 
-          // Check if already authenticated - use getAuthenticatedPPID (local, no network call)
-          const authResult = await lemmaAuth.getAuthenticatedPPID()
-          console.log('getAuthenticatedPPID on load:', authResult)
+          // Check if already authenticated - use signInWithLemma (correct implementation)
+          const authResult = await lemmaAuth.signInWithLemma()
+          console.log('signInWithLemma on load:', authResult)
 
           if (authResult.authenticated && authResult.ppid) {
             console.log('Already authenticated - attempting auto sign-in...')
@@ -200,10 +215,15 @@ export default function LoginPage() {
               dispatch(loginFailure())
               // Fall through to show button
             }
+          } else if (authResult.needsSetup) {
+            // User linked device but needs to create passkey
+            setButtonText('Create Passkey & Sign In')
           }
 
           // Set appropriate button text based on state
-          setButtonText(state.suggestedButtonText || 'Sign In with Passkey')
+          if (!authResult.needsSetup) {
+            setButtonText(state.suggestedButtonText || 'Sign In with Passkey')
+          }
 
           // Get link device HTML for users with wallets on other devices
           const linkHtml = await lemmaAuth.getLinkDeviceHtml()
