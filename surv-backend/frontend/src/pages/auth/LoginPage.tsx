@@ -199,44 +199,60 @@ export default function LoginPage() {
           setAuthStep('auto-auth')
           const state = await lemmaAuth.getAuthState()
           setAuthState(state)
-          console.log('Auth state:', state)
+          console.log('Auth state on page load:', state)
 
-          // Check if already authenticated - use signInWithLemma (correct implementation)
-          const authResult = await lemmaAuth.signInWithLemma()
-          console.log('signInWithLemma on load:', authResult)
+          // IMPORTANT: On page load, ONLY check if already authenticated
+          // DO NOT call signInWithLemma() - it triggers redirects!
+          // Use autoAuthenticate() or getAuthenticatedPPID() for zero-redirect check
+          const autoResult = await lemmaAuth.autoAuthenticate()
+          console.log('autoAuthenticate on load:', autoResult)
 
-          if (authResult.authenticated && authResult.ppid) {
-            console.log('Already authenticated - attempting auto sign-in...')
+          if (autoResult.authenticated && autoResult.walletSecret) {
+            console.log('Wallet already unlocked - attempting auto sign-in...')
             setButtonText('Signing in...')
             
             try {
               dispatch(loginStart())
               setAuthStep('verifying')
               
-              const response = await authenticateWithPPID(authResult.ppid)
+              // Get PPID from wallet secret
+              const ppidResult = await lemmaAuth.getAuthenticatedPPID()
+              console.log('getAuthenticatedPPID result:', ppidResult)
               
-              if (response.userExists && response.user) {
-                // Auto sign-in success!
-                onSignInSuccess(response.user)
-                return
+              if (ppidResult.authenticated && ppidResult.ppid) {
+                const response = await authenticateWithPPID(ppidResult.ppid)
+                
+                if (response.userExists && response.user) {
+                  // Auto sign-in success!
+                  onSignInSuccess(response.user)
+                  return
+                } else {
+                  // PPID exists but no account - show create account
+                  setButtonText('Create Account')
+                  setAuthStep('ready')
+                }
               } else {
-                // PPID exists but no account - show create account
-                setButtonText('Create Account')
-                setAuthStep('ready')
+                console.log('Could not get PPID despite wallet being unlocked')
+                dispatch(loginFailure())
               }
             } catch (err) {
               console.error('Auto sign-in failed:', err)
               dispatch(loginFailure())
               // Fall through to show button
             }
-          } else if (authResult.needsSetup) {
-            // User linked device but needs to create passkey
-            setButtonText('Create Passkey & Sign In')
           }
 
           // Set appropriate button text based on state
-          if (!authResult.needsSetup) {
-            setButtonText(state.suggestedButtonText || 'Sign In with Passkey')
+          // suggestedButtonText tells us what action the user needs
+          if (state.isUnlocked) {
+            // Already unlocked but didn't auto-sign-in (maybe no account yet)
+            setButtonText('Create Account')
+          } else if (state.hasWallet) {
+            // Has wallet but locked - needs to unlock
+            setButtonText('Unlock Wallet & Sign In')
+          } else {
+            // No wallet - needs to create passkey
+            setButtonText('Create Passkey & Sign In')
           }
 
           // Get link device HTML for users with wallets on other devices
