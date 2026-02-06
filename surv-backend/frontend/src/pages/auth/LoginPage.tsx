@@ -123,7 +123,8 @@ export default function LoginPage() {
         } catch (unlockErr) {
           console.error('Unlock failed:', unlockErr)
           // Maybe try popup unlock as fallback
-          await lemmaAuth.unlockWithPopup()
+          await lemmaAuth.smartUnlock()
+          // smartUnlock may redirect - if we're still here, try again
         }
       } else {
         // User needs to create a passkey first

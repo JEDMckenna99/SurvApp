@@ -181,7 +181,7 @@ class LemmaAuthService {
   }
 
   /**
-   * Unlock existing wallet with passkey
+   * Unlock existing wallet with passkey - uses redirect flow
    */
   async unlockWallet(): Promise<{ walletSecret?: string; success: boolean }> {
     if (!this.wallet) {
@@ -189,7 +189,12 @@ class LemmaAuthService {
     }
 
     try {
-      await this.wallet.unlock();
+      // Try smart unlock with redirect - this is the recommended approach
+      console.log('Attempting smart unlock with redirect...');
+      await this.wallet.smartUnlock({
+        returnUrl: window.location.href
+      });
+      // If we get here without redirect, try to get the wallet secret
       const walletSecret = await this.wallet.getWalletSecret();
       return { walletSecret, success: true };
     } catch (error) {
@@ -230,19 +235,41 @@ class LemmaAuthService {
   }
 
   /**
-   * Unlock wallet with popup (for user-initiated sign-in)
+   * Unlock wallet with redirect flow (sends user to lemma.id/unlock, then back)
    */
-  async unlockWithPopup(): Promise<{ authenticated: boolean; ppid?: string }> {
+  async unlockWithRedirect(): Promise<void> {
     if (!this.wallet) {
       throw new Error('Wallet not initialized');
     }
 
     try {
-      const result = await this.wallet.unlockWithPopup();
-      console.log('unlockWithPopup result:', result);
-      return result;
+      console.log('Starting redirect unlock flow...');
+      await this.wallet.unlockWithRedirect({
+        returnUrl: window.location.href
+      });
+      // Note: This will redirect the page, so code after this won't execute
     } catch (error) {
-      console.error('unlockWithPopup failed:', error);
+      console.error('unlockWithRedirect failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Smart unlock - convenience wrapper that handles the redirect flow
+   */
+  async smartUnlock(): Promise<void> {
+    if (!this.wallet) {
+      throw new Error('Wallet not initialized');
+    }
+
+    try {
+      console.log('Starting smart unlock flow...');
+      await this.wallet.smartUnlock({
+        returnUrl: window.location.href
+      });
+      // Note: This may redirect the page
+    } catch (error) {
+      console.error('smartUnlock failed:', error);
       throw error;
     }
   }
