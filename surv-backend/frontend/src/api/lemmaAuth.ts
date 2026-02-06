@@ -86,6 +86,73 @@ class LemmaAuthService {
 
     await this.wallet.init();
     this.initialized = true;
+
+    // If returning from redirect, wait for SDK to finish processing
+    if (this.isRedirectReturn()) {
+      console.log('[Surv] Detected redirect return - waiting for SDK to process...');
+      await this.waitForRedirectProcessing();
+      console.log('[Surv] Redirect processing complete');
+    }
+  }
+
+  /**
+   * Check if we're returning from a lemma.id redirect
+   */
+  private isRedirectReturn(): boolean {
+    const url = new URL(window.location.href);
+    // Check for common redirect return indicators
+    return url.searchParams.has('lemma_session') || 
+           url.searchParams.has('lemma_return') ||
+           url.searchParams.has('session') ||
+           document.referrer.includes('lemma.id');
+  }
+
+  /**
+   * Wait for the SDK to finish processing the redirect return
+   * The SDK processes redirects asynchronously after init()
+   */
+  private async waitForRedirectProcessing(): Promise<void> {
+    const maxWait = 5000; // 5 seconds max
+    const checkInterval = 100; // Check every 100ms
+    const startTime = Date.now();
+
+    return new Promise((resolve) => {
+      const check = async () => {
+        try {
+          // Check if wallet is now unlocked
+          const state = await this.wallet.getAuthState();
+          if (state.isUnlocked) {
+            console.log('[Surv] Wallet unlocked after redirect');
+            resolve();
+            return;
+          }
+
+          // Also check autoAuthenticate
+          const authResult = await this.wallet.autoAuthenticate();
+          if (authResult.authenticated) {
+            console.log('[Surv] Authenticated after redirect');
+            resolve();
+            return;
+          }
+
+          // Check timeout
+          if (Date.now() - startTime > maxWait) {
+            console.log('[Surv] Redirect processing timeout - continuing anyway');
+            resolve();
+            return;
+          }
+
+          // Keep waiting
+          setTimeout(check, checkInterval);
+        } catch (error) {
+          console.error('[Surv] Error checking redirect state:', error);
+          resolve();
+        }
+      };
+
+      // Start checking after a brief delay to let SDK start processing
+      setTimeout(check, 200);
+    });
   }
 
   /**
