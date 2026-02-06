@@ -99,60 +99,39 @@ class LemmaAuthService {
    * Check if we're returning from a lemma.id redirect
    */
   private isRedirectReturn(): boolean {
-    const url = new URL(window.location.href);
-    // Check for common redirect return indicators
-    return url.searchParams.has('lemma_session') || 
-           url.searchParams.has('lemma_return') ||
-           url.searchParams.has('session') ||
-           document.referrer.includes('lemma.id');
+    // Check referrer
+    if (document.referrer.includes('lemma.id')) {
+      console.log('[Surv] Detected redirect return via referrer');
+      return true;
+    }
+    
+    // Check sessionStorage flag (set before redirect)
+    if (sessionStorage.getItem('lemma_redirect_pending')) {
+      console.log('[Surv] Detected redirect return via session flag');
+      sessionStorage.removeItem('lemma_redirect_pending');
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Mark that we're about to redirect to Lemma
+   */
+  markRedirectPending(): void {
+    sessionStorage.setItem('lemma_redirect_pending', 'true');
   }
 
   /**
    * Wait for the SDK to finish processing the redirect return
-   * The SDK processes redirects asynchronously after init()
+   * Uses a simple delay instead of polling to avoid spamming the console
    */
   private async waitForRedirectProcessing(): Promise<void> {
-    const maxWait = 5000; // 5 seconds max
-    const checkInterval = 100; // Check every 100ms
-    const startTime = Date.now();
-
-    return new Promise((resolve) => {
-      const check = async () => {
-        try {
-          // Check if wallet is now unlocked
-          const state = await this.wallet.getAuthState();
-          if (state.isUnlocked) {
-            console.log('[Surv] Wallet unlocked after redirect');
-            resolve();
-            return;
-          }
-
-          // Also check autoAuthenticate
-          const authResult = await this.wallet.autoAuthenticate();
-          if (authResult.authenticated) {
-            console.log('[Surv] Authenticated after redirect');
-            resolve();
-            return;
-          }
-
-          // Check timeout
-          if (Date.now() - startTime > maxWait) {
-            console.log('[Surv] Redirect processing timeout - continuing anyway');
-            resolve();
-            return;
-          }
-
-          // Keep waiting
-          setTimeout(check, checkInterval);
-        } catch (error) {
-          console.error('[Surv] Error checking redirect state:', error);
-          resolve();
-        }
-      };
-
-      // Start checking after a brief delay to let SDK start processing
-      setTimeout(check, 200);
-    });
+    // Give the SDK time to process the redirect (it does this asynchronously)
+    // The SDK logs show it takes about 50-200ms to process
+    console.log('[Surv] Waiting for SDK to process redirect...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log('[Surv] Wait complete, checking auth state...');
   }
 
   /**
@@ -257,7 +236,9 @@ class LemmaAuthService {
 
     try {
       // Try smart unlock with redirect - this is the recommended approach
-      console.log('Attempting smart unlock with redirect...');
+      console.log('[Surv] Attempting smart unlock with redirect...');
+      // Mark that we're redirecting so we know when we come back
+      this.markRedirectPending();
       await this.wallet.smartUnlock({
         returnUrl: window.location.href
       });
@@ -265,7 +246,7 @@ class LemmaAuthService {
       const walletSecret = await this.wallet.getWalletSecret();
       return { walletSecret, success: true };
     } catch (error) {
-      console.error('Unlock wallet failed:', error);
+      console.error('[Surv] Unlock wallet failed:', error);
       throw error;
     }
   }
@@ -310,13 +291,15 @@ class LemmaAuthService {
     }
 
     try {
-      console.log('Starting redirect unlock flow...');
+      console.log('[Surv] Starting redirect unlock flow...');
+      // Mark that we're redirecting so we know when we come back
+      this.markRedirectPending();
       await this.wallet.unlockWithRedirect({
         returnUrl: window.location.href
       });
       // Note: This will redirect the page, so code after this won't execute
     } catch (error) {
-      console.error('unlockWithRedirect failed:', error);
+      console.error('[Surv] unlockWithRedirect failed:', error);
       throw error;
     }
   }
@@ -330,13 +313,15 @@ class LemmaAuthService {
     }
 
     try {
-      console.log('Starting smart unlock flow...');
+      console.log('[Surv] Starting smart unlock flow...');
+      // Mark that we're redirecting so we know when we come back
+      this.markRedirectPending();
       await this.wallet.smartUnlock({
         returnUrl: window.location.href
       });
       // Note: This may redirect the page
     } catch (error) {
-      console.error('smartUnlock failed:', error);
+      console.error('[Surv] smartUnlock failed:', error);
       throw error;
     }
   }
